@@ -1,31 +1,24 @@
 export default async function handler(req, res) {
-  console.log("🔔 Incoming request:", req.method, req.url);
-
   if (req.method !== "POST") {
-    console.log("❌ Invalid method:", req.method);
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  // Log the raw body
-  console.log("📦 Raw body:", req.body);
+  const { transId, time, amount, name, phone, account } = req.body;
+  const VALID_ACCOUNTS = ["001","002","003","004","005"];
 
-  const { transId, time, amount, name, phone, account } = req.body || {};
-  console.log("✅ Parsed fields:", { transId, time, amount, name, phone, account });
+  if (!VALID_ACCOUNTS.includes(account)) {
+    return res.json({ ResultCode: "C2B00012", ResultDesc: "Invalid Account" });
+  }
 
-  // Always respond quickly to Daraja
-  res.json({ ResultCode: "0", ResultDesc: "Success" });
-
-  // Forward to Google Apps Script endpoint
   try {
-    const response = await fetch(process.env.SHEET_URL, {
+    await fetch(process.env.SHEET_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ transId, time, amount, name, phone, account })
     });
 
-    const text = await response.text();
-    console.log("📤 Forwarded to sheet, response:", text);
+    return res.json({ ResultCode: "0", ResultDesc: "Success" });
   } catch (err) {
-    console.error("❌ Sheet forwarding failed:", err);
+    return res.json({ ResultCode: "1", ResultDesc: "Sheet Error" });
   }
 }
