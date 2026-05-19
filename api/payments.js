@@ -20,7 +20,7 @@ export default async function handler(req, res) {
     body = Object.fromEntries(params);
   }
 
-  console.log("Daraja Payload:", JSON.stringify(body, null, 2));
+  console.log("🔥 Daraja Payload:", JSON.stringify(body, null, 2));
 
   const { 
     TransID, 
@@ -36,25 +36,28 @@ export default async function handler(req, res) {
 
   const VALID_ACCOUNTS = ["001", "002", "003", "004", "005"];
 
-  // === VALIDATION LOGIC ===
-  if (!VALID_ACCOUNTS.includes(account)) {
-    console.log(`❌ Invalid Account: ${account}`);
-    return res.json({ 
-      ResultCode: "C2B00012", 
-      ResultDesc: "Invalid Account Reference" 
-    });
-  }
-
-  // If this is Validation request (usually no TransID yet)
+  // VALIDATION REQUEST (Daraja calls this BEFORE accepting payment)
   if (!TransID) {
-    console.log("✅ Validation request accepted");
+    if (!VALID_ACCOUNTS.includes(account)) {
+      console.log(`❌ Validation Failed - Invalid Account: ${account}`);
+      return res.json({ 
+        ResultCode: "C2B00012", 
+        ResultDesc: "Invalid Account Reference" 
+      });
+    }
+    console.log(`✅ Validation Passed for Account: ${account}`);
     return res.json({ 
       ResultCode: "0", 
       ResultDesc: "Accepted" 
     });
   }
 
-  // === CONFIRMATION LOGIC (after payment) ===
+  // CONFIRMATION REQUEST (After successful payment)
+  if (!VALID_ACCOUNTS.includes(account)) {
+    console.log(`❌ Invalid Account in Confirmation: ${account}`);
+    return res.json({ ResultCode: "C2B00012", ResultDesc: "Invalid Account" });
+  }
+
   try {
     await fetch(process.env.SHEET_URL, {
       method: "POST",
@@ -69,7 +72,7 @@ export default async function handler(req, res) {
       }),
     });
 
-    console.log(`✅ Transaction ${TransID} saved to sheet`);
+    console.log(`✅ Transaction Saved: ${TransID} | Amount: ${TransAmount}`);
     return res.json({ ResultCode: "0", ResultDesc: "Success" });
 
   } catch (err) {
