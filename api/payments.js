@@ -1,7 +1,5 @@
 export const config = {
-  api: {
-    bodyParser: false,
-  },
+  api: { bodyParser: false },
 };
 
 export default async function handler(req, res) {
@@ -22,7 +20,7 @@ export default async function handler(req, res) {
     body = Object.fromEntries(params);
   }
 
-  console.log("Incoming Daraja payload:", JSON.stringify(body, null, 2));
+  console.log("Daraja Payload:", JSON.stringify(body, null, 2));
 
   const { 
     TransID, 
@@ -38,17 +36,26 @@ export default async function handler(req, res) {
 
   const VALID_ACCOUNTS = ["001", "002", "003", "004", "005"];
 
+  // === VALIDATION LOGIC ===
   if (!VALID_ACCOUNTS.includes(account)) {
-    console.log(`Invalid account: ${account}`);
-    return res.json({ ResultCode: "C2B00012", ResultDesc: "Invalid Account" });
+    console.log(`❌ Invalid Account: ${account}`);
+    return res.json({ 
+      ResultCode: "C2B00012", 
+      ResultDesc: "Invalid Account Reference" 
+    });
   }
 
-  try {
-    if (!process.env.SHEET_URL) {
-      console.error("SHEET_URL is not configured!");
-      return res.json({ ResultCode: "1", ResultDesc: "Sheet URL not configured" });
-    }
+  // If this is Validation request (usually no TransID yet)
+  if (!TransID) {
+    console.log("✅ Validation request accepted");
+    return res.json({ 
+      ResultCode: "0", 
+      ResultDesc: "Accepted" 
+    });
+  }
 
+  // === CONFIRMATION LOGIC (after payment) ===
+  try {
     await fetch(process.env.SHEET_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -62,11 +69,11 @@ export default async function handler(req, res) {
       }),
     });
 
-    console.log(`Transaction ${TransID} saved successfully`);
+    console.log(`✅ Transaction ${TransID} saved to sheet`);
     return res.json({ ResultCode: "0", ResultDesc: "Success" });
 
   } catch (err) {
-    console.error("Error posting to Sheet:", err.message);
-    return res.json({ ResultCode: "1", ResultDesc: "Sheet Error" });
+    console.error("Sheet Error:", err.message);
+    return res.json({ ResultCode: "1", ResultDesc: "Internal Error" });
   }
 }
