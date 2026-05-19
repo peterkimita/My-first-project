@@ -1,7 +1,5 @@
 export const config = {
-  api: {
-    bodyParser: false,
-  },
+  api: { bodyParser: false },
 };
 
 export default async function handler(req, res) {
@@ -22,19 +20,26 @@ export default async function handler(req, res) {
     body = Object.fromEntries(params);
   }
 
-  console.log("Incoming Daraja payload:", JSON.stringify(body, null, 2));
+  console.log("Full Daraja Payload:", JSON.stringify(body, null, 2));
 
-  const { 
-    TransID, 
-    TransAmount, 
-    TransTime, 
-    MSISDN, 
-    FirstName, 
+  const {
+    TransID,
+    TransAmount,
+    TransTime,
+    MSISDN,
+    FirstName,
+    MiddleName,
+    LastName,
+    BillRefNumber,
     AccountReference,
-    BillRefNumber 
+    ThirdPartyTransID,
+    OrgAccountBalance,
+    TransactionType,
   } = body;
 
   const account = AccountReference || BillRefNumber || "";
+  const phone = MSISDN ? String(MSISDN).trim() : "";   // ← Strong fix for phone
+  const fullName = [FirstName, MiddleName, LastName].filter(Boolean).join(" ").trim();
 
   const VALID_ACCOUNTS = ["001", "002", "003", "004", "005"];
 
@@ -44,29 +49,27 @@ export default async function handler(req, res) {
   }
 
   try {
-    if (!process.env.SHEET_URL) {
-      console.error("SHEET_URL is not configured!");
-      return res.json({ ResultCode: "1", ResultDesc: "Sheet URL not configured" });
-    }
-
     await fetch(process.env.SHEET_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        transId: TransID,
-        time: TransTime,
-        amount: TransAmount,
-        name: FirstName || "Unknown",
-        phone: MSISDN,
+        transId: TransID || "",
+        time: TransTime || "",                    // Raw TransTime (e.g. 20260519124500)
+        amount: TransAmount || "",
+        phone: phone || "",                       // Clean MSISDN
+        name: fullName || FirstName || "Unknown",
         account: account,
+        thirdPartyTransID: ThirdPartyTransID || "",
+        orgBalance: OrgAccountBalance || "",
+        transactionType: TransactionType || "",
       }),
     });
 
-    console.log(`Transaction ${TransID} saved successfully`);
+    console.log(`✅ Saved transaction ${TransID} | Phone: ${phone}`);
     return res.json({ ResultCode: "0", ResultDesc: "Success" });
 
   } catch (err) {
-    console.error("Error posting to Sheet:", err.message);
+    console.error("Sheet Error:", err.message);
     return res.json({ ResultCode: "1", ResultDesc: "Sheet Error" });
   }
 }
