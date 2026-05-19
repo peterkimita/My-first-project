@@ -1,8 +1,6 @@
-import { IncomingForm } from "formidable";
-
 export const config = {
   api: {
-    bodyParser: false, // disable Next.js default JSON parser
+    bodyParser: false, // disable Next.js default parser
   },
 };
 
@@ -11,44 +9,23 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  let body = {};
+  let rawBody = "";
+  for await (const chunk of req) {
+    rawBody += chunk;
+  }
 
+  let body;
   try {
-    // Try parsing as JSON first
-    const chunks = [];
-    for await (const chunk of req) {
-      chunks.push(chunk);
-    }
-    const rawBody = Buffer.concat(chunks).toString();
-
-    try {
-      body = JSON.parse(rawBody);
-    } catch (jsonErr) {
-      // If not JSON, parse as form data
-      const form = new IncomingForm();
-      body = await new Promise((resolve, reject) => {
-        form.parse(req, (err, fields) => {
-          if (err) reject(err);
-          else resolve(fields);
-        });
-      });
-    }
-  } catch (err) {
-    console.error("Error parsing body:", err);
-    return res.status(400).json({ error: "Invalid body format" });
+    // Try JSON first
+    body = JSON.parse(rawBody);
+  } catch {
+    // Fallback: parse form-encoded
+    body = Object.fromEntries(new URLSearchParams(rawBody));
   }
 
   console.log("Incoming Daraja payload:", body);
 
-  // Map Daraja fields
-  const {
-    TransID,
-    TransAmount,
-    TransTime,
-    MSISDN,
-    FirstName,
-    AccountReference,
-  } = body;
+  const { TransID, TransAmount, TransTime, MSISDN, FirstName, AccountReference } = body;
 
   const transId = TransID;
   const amount = TransAmount;
