@@ -2,8 +2,6 @@ export const config = {
   api: { bodyParser: false },
 };
 
-import { google } from 'googleapis';
-
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
@@ -34,65 +32,51 @@ export default async function handler(req, res) {
     BillRefNumber 
   } = body;
 
-  const account = (AccountReference || BillRefNumber || "Unknown").trim();
+  const account = AccountReference || BillRefNumber || "";
 
   const VALID_ACCOUNTS = ["001", "002", "003", "004", "005"];
 
-  // Validation Request
+  // VALIDATION REQUEST (Daraja calls this BEFORE accepting payment)
   if (!TransID) {
     if (!VALID_ACCOUNTS.includes(account)) {
-      return res.json({ ResultCode: "C2B00012", ResultDesc: "Invalid Account" });
+      console.log(`❌ Validation Failed - Invalid Account: ${account}`);
+      return res.json({ 
+        ResultCode: "C2B00012", 
+        ResultDesc: "Invalid Account Reference" 
+      });
     }
-    return res.json({ ResultCode: "0", ResultDesc: "Accepted" });
+    console.log(`✅ Validation Passed for Account: ${account}`);
+    return res.json({ 
+      ResultCode: "0", 
+      ResultDesc: "Accepted" 
+    });
   }
 
-  // Confirmation Request
+  // CONFIRMATION REQUEST (After successful payment)
   if (!VALID_ACCOUNTS.includes(account)) {
+    console.log(`❌ Invalid Account in Confirmation: ${account}`);
     return res.json({ ResultCode: "C2B00012", ResultDesc: "Invalid Account" });
   }
 
   try {
-    const auth = new google.auth.GoogleAuth({
-      credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY),
-      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    await fetch(process.env.SHEET_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        transId: TransID,
+        time: TransTime,
+        amount: TransAmount,
+        name: FirstName || "Unknown",
+        phone: MSISDN,
+        account: account,
+      }),
     });
 
-    const sheets = google.sheets({ version: 'v4', auth });
-
-    // Format TransTime
-    let formattedTime = TransTime || "";
-    if (TransTime && TransTime.length === 14) {
-      formattedTime = `${TransTime.substring(0,4)}-${TransTime.substring(4,6)}-${TransTime.substring(6,8)} ` +
-                     `${TransTime.substring(8,10)}:${TransTime.substring(10,12)}:${TransTime.substring(12,14)}`;
-    }
-
-    const phone = (MSISDN && MSISDN.length > 12) ? "N/A" : (MSISDN || "N/A");
-
-    const range = `${account}!A:G`;   // ← Writes to sheet named "001", "002", etc.
-
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: process.env.GOOGLE_SHEET_ID,
-      range: range,
-      valueInputOption: "USER_ENTERED",
-      insertDataOption: "INSERT_ROWS",
-      resource: {
-        values: [[
-          TransID || "",
-          formattedTime,
-          TransAmount || "",
-          FirstName || "Unknown",
-          phone,
-          account,
-          new Date().toLocaleString()
-        ]]
-      },
-    });
-
-    console.log(`✅ Saved to Sheet "${account}": ${TransID}`);
+    console.log(`✅ Transaction Saved: ${TransID} | Amount: ${TransAmount}`);
     return res.json({ ResultCode: "0", ResultDesc: "Success" });
 
   } catch (err) {
-    console.error("❌ Sheet Error:", err.message);
+    console.error("Sheet Error:", err.message);
     return res.json({ ResultCode: "1", ResultDesc: "Internal Error" });
   }
 }
