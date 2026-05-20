@@ -4,9 +4,6 @@ export const config = {
 
 import { google } from 'googleapis';
 
-const SHEET_ID = process.env.GOOGLE_SHEET_ID; // e.g. 1abc123xyz...
-const RANGE = "Sheet1!A:G";   // Change if needed
-
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
@@ -37,7 +34,7 @@ export default async function handler(req, res) {
     BillRefNumber 
   } = body;
 
-  const account = AccountReference || BillRefNumber || "";
+  const account = (AccountReference || BillRefNumber || "Unknown").trim();
 
   const VALID_ACCOUNTS = ["001", "002", "003", "004", "005"];
 
@@ -55,7 +52,6 @@ export default async function handler(req, res) {
   }
 
   try {
-    // === WRITE DIRECTLY TO GOOGLE SHEETS ===
     const auth = new google.auth.GoogleAuth({
       credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY),
       scopes: ['https://www.googleapis.com/auth/spreadsheets'],
@@ -70,18 +66,20 @@ export default async function handler(req, res) {
                      `${TransTime.substring(8,10)}:${TransTime.substring(10,12)}:${TransTime.substring(12,14)}`;
     }
 
-    const phone = (MSISDN && MSISDN.length > 12) ? "N/A" : MSISDN;
+    const phone = (MSISDN && MSISDN.length > 12) ? "N/A" : (MSISDN || "N/A");
+
+    const range = `${account}!A:G`;   // ← Writes to sheet named "001", "002", etc.
 
     await sheets.spreadsheets.values.append({
-      spreadsheetId: SHEET_ID,
-      range: RANGE,
+      spreadsheetId: process.env.GOOGLE_SHEET_ID,
+      range: range,
       valueInputOption: "USER_ENTERED",
       insertDataOption: "INSERT_ROWS",
       resource: {
         values: [[
-          TransID,
+          TransID || "",
           formattedTime,
-          TransAmount,
+          TransAmount || "",
           FirstName || "Unknown",
           phone,
           account,
@@ -90,11 +88,11 @@ export default async function handler(req, res) {
       },
     });
 
-    console.log(`✅ Saved to Google Sheets: ${TransID}`);
+    console.log(`✅ Saved to Sheet "${account}": ${TransID}`);
     return res.json({ ResultCode: "0", ResultDesc: "Success" });
 
   } catch (err) {
-    console.error("Sheet Error:", err.message);
+    console.error("❌ Sheet Error:", err.message);
     return res.json({ ResultCode: "1", ResultDesc: "Internal Error" });
   }
 }
