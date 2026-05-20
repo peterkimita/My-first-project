@@ -34,7 +34,7 @@ export default async function handler(req, res) {
 
   const account = AccountReference || BillRefNumber || "";
 
-  const VALID_ACCOUNTS = ["001", "002", "003", "004", "005"];
+  const VALID_ACCOUNTS = ["001", "002", "003", "004", "005","006","007","008","009","010","011","012","013","014","015","016","017","018","019","020","021","022"];
 
   // VALIDATION REQUEST (Daraja calls this BEFORE accepting payment)
   if (!TransID) {
