@@ -1,39 +1,22 @@
 // ============================================================
 // PEJA BEAUTY — DARAJA PAYMENT HANDLER
-// Vercel Serverless Function
 // ============================================================
-// ENVIRONMENT VARIABLES (set in Vercel → Project → Settings → Environment Variables)
-//
-//   SUPABASE_URL        = https://sreenqozalzuudydhufm.supabase.co
-//   SUPABASE_ANON_KEY   = your_anon_key_here
-//   TALKSASA_SECRET     = your_talksasa_secret_here
-//
+// ENVIRONMENT VARIABLES (Vercel → Project → Settings → Environment Variables)
+//   SUPABASE_URL       = https://sreenqozalzuudydhufm.supabase.co
+//   SUPABASE_ANON_KEY  = your_anon_key_here
+//   TALKSASA_SECRET    = your_talksasa_secret_here
 // ============================================================
 
-export const config = {
-  api: { bodyParser: false },
-};
-
-// ── Helpers ──────────────────────────────────────────────────
+export const config = { api: { bodyParser: false } };
 
 function formatDateTime(transTime) {
-  // TransTime format: "20260522123920" → "22/05/2026 12:39"
   try {
     const s = String(transTime);
-    const year  = s.slice(0, 4);
-    const month = s.slice(4, 6);
-    const day   = s.slice(6, 8);
-    const hour  = s.slice(8, 10);
-    const min   = s.slice(10, 12);
-    return `${day}/${month}/${year} ${hour}:${min}`;
-  } catch {
-    return transTime;
-  }
+    return `${s.slice(6,8)}/${s.slice(4,6)}/${s.slice(0,4)} ${s.slice(8,10)}:${s.slice(10,12)}`;
+  } catch { return transTime; }
 }
 
-// ── Supabase ─────────────────────────────────────────────────
-
-async function supabase(path, method = "GET", body = null) {
+async function sb(path, method = "GET", body = null) {
   const url = `${process.env.SUPABASE_URL}/rest/v1/${path}`;
   const opts = {
     method,
@@ -55,88 +38,68 @@ async function supabase(path, method = "GET", body = null) {
 }
 
 async function getAccount(accountNumber) {
-  const rows = await supabase(
-    `accounts?account_number=eq.${accountNumber}&select=*`
-  );
+  const rows = await sb(`accounts?account_number=eq.${accountNumber}&select=*`);
   return rows[0] || null;
 }
 
 async function saveTxn(data) {
-  return supabase("transactions", "POST", data);
+  return sb("transactions", "POST", data);
 }
 
 async function getDailyTotal(accountNumber) {
-  // Sum all transactions for this account today (Nairobi = UTC+3)
+  // Use UTC times — Nairobi is UTC+3, so midnight Nairobi = 21:00 UTC previous day
   const now = new Date();
-  const nairobiOffset = 3 * 60 * 60 * 1000;
-  const nairobiNow = new Date(now.getTime() + nairobiOffset);
-  const todayStr = nairobiNow.toISOString().slice(0, 10); // "2026-05-22"
+  const nairobiNow = new Date(now.getTime() + 3 * 60 * 60 * 1000);
+  const todayStr = nairobiNow.toISOString().slice(0, 10); // "2026-05-26"
+  // Midnight Nairobi in UTC = todayStr at 21:00 UTC the day before
+  const dayStartUTC = new Date(`${todayStr}T00:00:00.000Z`);
+  dayStartUTC.setHours(dayStartUTC.getHours() - 3); // subtract 3h to get UTC midnight Nairobi
+  const dayEndUTC = new Date(dayStartUTC.getTime() + 24 * 60 * 60 * 1000 - 1);
 
-  // created_at is stored in UTC; we filter from midnight Nairobi (UTC+3 → subtract 3h)
-  const dayStart = `${todayStr}T00:00:00+03:00`;
-  const dayEnd   = `${todayStr}T23:59:59+03:00`;
+  const startISO = dayStartUTC.toISOString(); // e.g. "2026-05-25T21:00:00.000Z"
+  const endISO   = dayEndUTC.toISOString();   // e.g. "2026-05-26T20:59:59.999Z"
 
-  const rows = await supabase(
-    `transactions?account_number=eq.${accountNumber}&created_at=gte.${dayStart}&created_at=lte.${dayEnd}&select=amount`
+  const rows = await sb(
+    `transactions?account_number=eq.${accountNumber}&created_at=gte.${startISO}&created_at=lte.${endISO}&select=amount`
   );
   return rows.reduce((sum, r) => sum + parseFloat(r.amount), 0);
 }
 
-// ── Talk Sasa SMS ─────────────────────────────────────────────
-
 async function sendSMS(to, message) {
-  const payload = {
-    recipient: to,          // 2547XXXXXXXX format
-    sender_id: "PejaBeauty",
-    message,
-    type: "plain",
-  };
   const r = await fetch("https://bulksms.talksasa.com/api/v3/sms/send", {
     method: "POST",
     headers: {
       "Content-Type":  "application/json",
       "Authorization": `Bearer ${process.env.TALKSASA_SECRET}`,
     },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({
+      recipient: to,
+      sender_id: "PejaBeauty",
+      message,
+      type: "plain",
+    }),
   });
   const result = await r.json();
   console.log("📱 SMS Result:", JSON.stringify(result));
   return result;
 }
 
-// ── Main Handler ──────────────────────────────────────────────
-
 export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
+  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
-  // Parse body (Daraja sends urlencoded or JSON depending on config)
   let rawBody = "";
   for await (const chunk of req) rawBody += chunk;
 
   let body;
-  try {
-    body = JSON.parse(rawBody);
-  } catch {
-    const params = new URLSearchParams(rawBody);
-    body = Object.fromEntries(params);
-  }
+  try { body = JSON.parse(rawBody); }
+  catch { body = Object.fromEntries(new URLSearchParams(rawBody)); }
 
   console.log("🔥 Daraja Payload:", JSON.stringify(body, null, 2));
 
-  const {
-    TransID,
-    TransAmount,
-    TransTime,
-    FirstName,
-    BillRefNumber,
-    AccountReference,
-  } = body;
-
+  const { TransID, TransAmount, TransTime, FirstName, BillRefNumber, AccountReference } = body;
   const account = (AccountReference || BillRefNumber || "").trim();
 
-  // ── VALIDATION (Daraja calls with no TransID) ────────────────
+  // ── VALIDATION ───────────────────────────────────────────────
   if (!TransID) {
     const exists = await getAccount(account);
     if (!exists) {
@@ -169,10 +132,10 @@ export default async function handler(req, res) {
       amount:         parseFloat(TransAmount),
       sender_name:    FirstName || "Customer",
       account_number: account,
+      type:           "mpesa",
     });
     console.log(`✅ Saved: ${TransID} | KES ${TransAmount} → ${account}`);
   } catch (err) {
-    // Duplicate TransID → already processed, still return success to Daraja
     if (err.message.includes("23505")) {
       console.log(`⚠️ Duplicate TransID ignored: ${TransID}`);
       return res.json({ ResultCode: "0", ResultDesc: "Success" });
@@ -181,34 +144,28 @@ export default async function handler(req, res) {
     return res.json({ ResultCode: "1", ResultDesc: "Internal Error" });
   }
 
-  // Get daily running total (includes this transaction)
-  // Small delay to ensure Supabase has committed the row before we sum
-  await new Promise(r => setTimeout(r, 500));
-  let dailyTotal = 0;
+  // Get daily running total
+  await new Promise(r => setTimeout(r, 400));
+  let dailyTotal = parseFloat(TransAmount);
   try {
-    dailyTotal = await getDailyTotal(account);
-    // Fallback: if query returned 0 or less than this transaction, 
-    // at minimum show this transaction amount
-    if (dailyTotal < parseFloat(TransAmount)) {
-      dailyTotal = parseFloat(TransAmount);
-    }
+    const queried = await getDailyTotal(account);
+    if (queried >= parseFloat(TransAmount)) dailyTotal = queried;
+    console.log(`💰 Daily total for ${account}: KES ${dailyTotal}`);
   } catch (err) {
     console.error("Daily total error:", err.message);
-    dailyTotal = parseFloat(TransAmount); // fallback to just this amount
   }
 
-  // Send SMS to account holder
-  const dateStr  = formatDateTime(TransTime);
-  const amount   = parseFloat(TransAmount).toFixed(2);
-  const sender   = (FirstName || "Customer").charAt(0).toUpperCase() + (FirstName || "Customer").slice(1).toLowerCase();
+  // Send SMS
+  const dateStr    = formatDateTime(TransTime);
+  const amount     = parseFloat(TransAmount).toFixed(2);
+  const sender     = (FirstName || "Customer").charAt(0).toUpperCase() + (FirstName || "Customer").slice(1).toLowerCase();
   const holderName = accountHolder.name;
-  const message  = `Dear ${holderName}, you have received Ksh ${amount} from ${sender} on ${dateStr}. The new account balance is Ksh ${dailyTotal.toFixed(2)}. Transaction ID: ${TransID}`;
+  const message    = `Dear ${holderName}, you have received Ksh ${amount} from ${sender} on ${dateStr}. The new account balance is Ksh ${dailyTotal.toFixed(2)}. Transaction ID: ${TransID}`;
 
   try {
     await sendSMS(accountHolder.phone, message);
   } catch (err) {
     console.error("SMS error:", err.message);
-    // Non-fatal — payment is already confirmed
   }
 
   return res.json({ ResultCode: "0", ResultDesc: "Success" });
