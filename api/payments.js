@@ -182,12 +182,19 @@ export default async function handler(req, res) {
   }
 
   // Get daily running total (includes this transaction)
+  // Small delay to ensure Supabase has committed the row before we sum
+  await new Promise(r => setTimeout(r, 500));
   let dailyTotal = 0;
   try {
     dailyTotal = await getDailyTotal(account);
+    // Fallback: if query returned 0 or less than this transaction, 
+    // at minimum show this transaction amount
+    if (dailyTotal < parseFloat(TransAmount)) {
+      dailyTotal = parseFloat(TransAmount);
+    }
   } catch (err) {
     console.error("Daily total error:", err.message);
-    // Non-fatal — still send SMS with amount received
+    dailyTotal = parseFloat(TransAmount); // fallback to just this amount
   }
 
   // Send SMS to account holder
