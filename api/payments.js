@@ -1,3 +1,11 @@
+<!-- 
+  SECTIONS (Ctrl+F to jump):
+  - CONFIG: line ~370 (SUPABASE_URL, ADMIN_PWD)
+  - ACCOUNTS CRUD: search "saveAccount"
+  - CASH SALE: search "saveCashSale"  
+  - SMS logic: search "bulksms.talksasa"
+  - PDF export: search "makePDF"
+-->
 // ============================================================
 // PEJA BEAUTY — DARAJA PAYMENT HANDLER
 // ============================================================
