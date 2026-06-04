@@ -1,28 +1,36 @@
 // ============================================================
-// PEJA BEAUTY — DARAJA PAYMENT HANDLER
+// MLANGO SOKO — DARAJA PAYMENT HANDLER
 // ============================================================
 // ENVIRONMENT VARIABLES (Vercel → Project → Settings → Environment Variables)
-//   SUPABASE_URL       = https://sreenqozalzuudydhufm.supabase.co
-//   SUPABASE_ANON_KEY  = your_anon_key_here
-//   TALKSASA_SECRET    = your_talksasa_secret_here
+//   NEXT_PUBLIC_SUPABASE_URL       = https://sreenqozalzuudydhufm.supabase.co
+//   NEXT_PUBLIC_SUPABASE_ANON_KEY  = your anon key
+//   SUPABASE_SERVICE_ROLE_KEY      = your service role key
+//   TALKSASA_SECRET                = your talksasa token
+//
+// HOW THIS WORKS:
+// Safaricom sends TWO requests for every payment:
+//   1. VALIDATION  — "Is this account number valid?" (no TransID)
+//   2. CONFIRMATION — "Payment confirmed, save it." (has TransID)
+//
+// On confirmation we:
+//   - Find the member by account number
+//   - Add the amount to their UNALLOCATED balance
+//   - Save a transaction record
+//   - Send an SMS to the member
 // ============================================================
 
 export const config = { api: { bodyParser: false } };
 
-function formatDateTime(transTime) {
-  try {
-    const s = String(transTime);
-    return `${s.slice(6,8)}/${s.slice(4,6)}/${s.slice(0,4)} ${s.slice(8,10)}:${s.slice(10,12)}`;
-  } catch { return transTime; }
-}
-
+// ── SUPABASE HELPER ──────────────────────────────────────────
+// Talks to our database. Uses the service role key so it can
+// update balances securely from the server side.
 async function sb(path, method = "GET", body = null) {
-  const url = `${process.env.SUPABASE_URL}/rest/v1/${path}`;
+  const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/${path}`;
   const opts = {
     method,
     headers: {
-      "apikey":        process.env.SUPABASE_ANON_KEY,
-      "Authorization": `Bearer ${process.env.SUPABASE_ANON_KEY}`,
+      "apikey":        process.env.SUPABASE_SERVICE_ROLE_KEY,
+      "Authorization": `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
       "Content-Type":  "application/json",
       "Prefer":        method === "POST" ? "return=representation" : "",
     },
@@ -37,34 +45,17 @@ async function sb(path, method = "GET", body = null) {
   return text ? JSON.parse(text) : [];
 }
 
-async function getAccount(accountNumber) {
-  const rows = await sb(`accounts?account_number=eq.${accountNumber}&select=*`);
-  return rows[0] || null;
+// ── FORMAT DATE FOR SMS ──────────────────────────────────────
+// Converts Safaricom's TransTime format (20260605120000)
+// to readable format (05/06/2026 12:00)
+function formatDateTime(transTime) {
+  try {
+    const s = String(transTime);
+    return `${s.slice(6,8)}/${s.slice(4,6)}/${s.slice(0,4)} ${s.slice(8,10)}:${s.slice(10,12)}`;
+  } catch { return String(transTime); }
 }
 
-async function saveTxn(data) {
-  return sb("transactions", "POST", data);
-}
-
-async function getDailyTotal(accountNumber) {
-  // Use UTC times — Nairobi is UTC+3, so midnight Nairobi = 21:00 UTC previous day
-  const now = new Date();
-  const nairobiNow = new Date(now.getTime() + 3 * 60 * 60 * 1000);
-  const todayStr = nairobiNow.toISOString().slice(0, 10); // "2026-05-26"
-  // Midnight Nairobi in UTC = todayStr at 21:00 UTC the day before
-  const dayStartUTC = new Date(`${todayStr}T00:00:00.000Z`);
-  dayStartUTC.setHours(dayStartUTC.getHours() - 3); // subtract 3h to get UTC midnight Nairobi
-  const dayEndUTC = new Date(dayStartUTC.getTime() + 24 * 60 * 60 * 1000 - 1);
-
-  const startISO = dayStartUTC.toISOString(); // e.g. "2026-05-25T21:00:00.000Z"
-  const endISO   = dayEndUTC.toISOString();   // e.g. "2026-05-26T20:59:59.999Z"
-
-  const rows = await sb(
-    `transactions?account_number=eq.${accountNumber}&created_at=gte.${startISO}&created_at=lte.${endISO}&select=amount`
-  );
-  return rows.reduce((sum, r) => sum + parseFloat(r.amount), 0);
-}
-
+// ── SEND SMS ─────────────────────────────────────────────────
 async function sendSMS(to, message) {
   const r = await fetch("https://bulksms.talksasa.com/api/v3/sms/send", {
     method: "POST",
@@ -74,7 +65,7 @@ async function sendSMS(to, message) {
     },
     body: JSON.stringify({
       recipient: to,
-      sender_id: "PejaBeauty",
+      sender_id: "MlangoSoko",   // ← update once registered with Talksasa
       message,
       type: "plain",
     }),
@@ -84,89 +75,167 @@ async function sendSMS(to, message) {
   return result;
 }
 
+// ── MAIN HANDLER ─────────────────────────────────────────────
 export default async function handler(req, res) {
-  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
+  // Only accept POST requests from Safaricom
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  // Read the raw request body
   let rawBody = "";
   for await (const chunk of req) rawBody += chunk;
 
+  // Parse it — Safaricom sends JSON
   let body;
-  try { body = JSON.parse(rawBody); }
-  catch { body = Object.fromEntries(new URLSearchParams(rawBody)); }
+  try {
+    body = JSON.parse(rawBody);
+  } catch {
+    body = Object.fromEntries(new URLSearchParams(rawBody));
+  }
 
   console.log("🔥 Daraja Payload:", JSON.stringify(body, null, 2));
 
-  const { TransID, TransAmount, TransTime, FirstName, BillRefNumber, AccountReference } = body;
-  const account = (AccountReference || BillRefNumber || "").trim();
+  // Pull out the fields Safaricom sends
+  const {
+    TransID,
+    TransAmount,
+    TransTime,
+    FirstName,
+    BillRefNumber,
+    AccountReference,
+  } = body;
 
-  // ── VALIDATION ───────────────────────────────────────────────
+  // Account number is what the member entered on Paybill
+  // e.g. "001", "002" etc.
+  const account = (AccountReference || BillRefNumber || "").trim().padStart(3, "0");
+
+  // ── STEP 1: VALIDATION ────────────────────────────────────
+  // Safaricom first asks: "Is this account valid?"
+  // If no TransID, this is a validation request.
   if (!TransID) {
-    const exists = await getAccount(account);
-    if (!exists) {
-      console.log(`❌ Validation Failed — Unknown Account: ${account}`);
-      return res.json({ ResultCode: "C2B00012", ResultDesc: "Invalid Account Reference" });
+    console.log(`🔍 Validation request for account: ${account}`);
+    try {
+      const rows = await sb(
+        `members?account_number=eq.${account}&status=eq.active&select=id,full_name`
+      );
+      if (!rows.length) {
+        console.log(`❌ Validation Failed — Unknown Account: ${account}`);
+        return res.json({ ResultCode: "C2B00012", ResultDesc: "Invalid Account Number" });
+      }
+      console.log(`✅ Validation Passed — Account: ${account} (${rows[0].full_name})`);
+      return res.json({ ResultCode: "0", ResultDesc: "Accepted" });
+    } catch (err) {
+      console.error("Validation DB error:", err.message);
+      // If DB fails, accept anyway to not block payment
+      return res.json({ ResultCode: "0", ResultDesc: "Accepted" });
     }
-    console.log(`✅ Validation Passed — Account: ${account} (${exists.name})`);
-    return res.json({ ResultCode: "0", ResultDesc: "Accepted" });
   }
 
-  // ── CONFIRMATION ─────────────────────────────────────────────
-  let accountHolder;
+  // ── STEP 2: CONFIRMATION ──────────────────────────────────
+  // Safaricom says: "Payment confirmed. Save it."
+  console.log(`💰 Confirmation: ${TransID} | KES ${TransAmount} → ${account}`);
+
+  // Look up the member
+  let member;
   try {
-    accountHolder = await getAccount(account);
+    const rows = await sb(
+      `members?account_number=eq.${account}&status=eq.active&select=id,full_name,phone_number`
+    );
+    member = rows[0];
   } catch (err) {
-    console.error("Supabase lookup error:", err.message);
+    console.error("Member lookup error:", err.message);
     return res.json({ ResultCode: "1", ResultDesc: "DB Error" });
   }
 
-  if (!accountHolder) {
-    console.log(`❌ Unknown Account in Confirmation: ${account}`);
+  if (!member) {
+    console.log(`❌ Member not found for account: ${account}`);
     return res.json({ ResultCode: "C2B00012", ResultDesc: "Invalid Account" });
   }
 
-  // Save transaction
+  const amount = parseFloat(TransAmount);
+
+  // ── STEP 3: SAVE TRANSACTION ──────────────────────────────
   try {
-    await saveTxn({
-      trans_id:       TransID,
-      trans_time:     TransTime,
-      amount:         parseFloat(TransAmount),
-      sender_name:    FirstName || "Customer",
-      account_number: account,
-      type:           "mpesa",
+    await sb("transactions", "POST", {
+      member_id:         member.id,
+      type:              "paybill",
+      amount:            amount,
+      direction:         "credit",
+      allocation_target: "unallocated",
+      mpesa_trans_id:    TransID,
+      reason:            `M-PESA payment from ${FirstName || "Customer"}`,
     });
-    console.log(`✅ Saved: ${TransID} | KES ${TransAmount} → ${account}`);
+    console.log(`✅ Transaction saved: ${TransID}`);
   } catch (err) {
+    // Error code 23505 = duplicate transaction ID — already saved, ignore
     if (err.message.includes("23505")) {
       console.log(`⚠️ Duplicate TransID ignored: ${TransID}`);
       return res.json({ ResultCode: "0", ResultDesc: "Success" });
     }
-    console.error("Save error:", err.message);
+    console.error("Transaction save error:", err.message);
     return res.json({ ResultCode: "1", ResultDesc: "Internal Error" });
   }
 
-  // Get daily running total
-  await new Promise(r => setTimeout(r, 400));
-  let dailyTotal = parseFloat(TransAmount);
+  // ── STEP 4: UPDATE UNALLOCATED BALANCE ───────────────────
+  // We add the payment to the member's unallocated pot.
+  // On Thursday midnight the system will move it to the
+  // right place (savings, loans, contributions etc.)
   try {
-    const queried = await getDailyTotal(account);
-    if (queried >= parseFloat(TransAmount)) dailyTotal = queried;
-    console.log(`💰 Daily total for ${account}: KES ${dailyTotal}`);
+    // Get current balance
+    const balRows = await sb(
+      `balances?member_id=eq.${member.id}&select=id,unallocated`
+    );
+
+    if (balRows.length) {
+      // Balance record exists — add to it
+      const current = parseFloat(balRows[0].unallocated) || 0;
+      const newBal  = current + amount;
+      await sb(`balances?member_id=eq.${member.id}`, "PATCH", {
+        unallocated: newBal,
+        updated_at:  new Date().toISOString(),
+      });
+      console.log(`💼 Unallocated updated: ${current} + ${amount} = ${newBal} for ${member.full_name}`);
+
+      // ── STEP 5: SEND SMS ────────────────────────────────
+      const dateStr = formatDateTime(TransTime);
+      const sender  = (FirstName || "Customer")
+        .charAt(0).toUpperCase() +
+        (FirstName || "Customer").slice(1).toLowerCase();
+
+      const message =
+        `Dear ${member.full_name.split(" ")[0]}, ` +
+        `KES ${amount.toFixed(2)} received from ${sender} on ${dateStr}. ` +
+        `Unallocated balance: KES ${newBal.toFixed(2)}. ` +
+        `Ref: ${TransID}. ` +
+        `Funds will be allocated on Thursday midnight.`;
+
+      try {
+        await sendSMS(member.phone_number, message);
+      } catch (err) {
+        // SMS failure should not block the payment confirmation
+        console.error("SMS error:", err.message);
+      }
+
+    } else {
+      // No balance record yet — create one
+      // This should not normally happen as we create balances
+      // when members are added, but just in case.
+      await sb("balances", "POST", {
+        member_id:   member.id,
+        savings:     0,
+        unallocated: amount,
+      });
+      console.log(`⚠️ Created missing balance record for ${member.full_name}`);
+    }
+
   } catch (err) {
-    console.error("Daily total error:", err.message);
+    console.error("Balance update error:", err.message);
+    // Still return success to Safaricom — transaction is saved,
+    // admin can manually fix the balance if needed.
   }
 
-  // Send SMS
-  const dateStr    = formatDateTime(TransTime);
-  const amount     = parseFloat(TransAmount).toFixed(2);
-  const sender     = (FirstName || "Customer").charAt(0).toUpperCase() + (FirstName || "Customer").slice(1).toLowerCase();
-  const holderName = accountHolder.name;
-  const message    = `Dear ${holderName}, you have received Ksh ${amount} from ${sender} on ${dateStr}. The new account balance is Ksh ${dailyTotal.toFixed(2)}. Transaction ID: ${TransID}`;
-
-  try {
-    await sendSMS(accountHolder.phone, message);
-  } catch (err) {
-    console.error("SMS error:", err.message);
-  }
-
+  // Always tell Safaricom we received the payment successfully
   return res.json({ ResultCode: "0", ResultDesc: "Success" });
 }
