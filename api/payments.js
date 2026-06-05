@@ -8,31 +8,15 @@ const MEMBERS = {
   "005": { name: "Peter",  phone: "254714082191" },
 };
 
+const seen = new Set();
+
 async function sendSMS(phone, message) {
-  const token = process.env.TALK_SASA_TOKEN;
-  const payload = {
-    recipient: String(phone),
-    sender_id: "PejaBeauty",
-    type: "plain",
-    message,
-  };
-
-  console.log("SMS_TOKEN_EXISTS:", !!token);
-  console.log("SMS_PAYLOAD:", JSON.stringify(payload));
-
   const res = await fetch("https://bulksms.talksasa.com/api/v3/sms/send", {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
+    headers: { Authorization: `Bearer ${process.env.TALK_SASA_TOKEN}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ recipient: String(phone), sender_id: "PejaBeauty", type: "plain", message }),
   });
-
-  console.log("SMS_HTTP_STATUS:", res.status);
-  console.log("SMS_CONTENT_TYPE:", res.headers.get("content-type"));
-  const raw = await res.text();
-  console.log("SMS_RAW_RESPONSE:", raw.slice(0, 500)); // first 500 chars of whatever comes back
+  console.log("SMS:", res.status, await res.text());
 }
 
 export default async function handler(req, res) {
@@ -40,34 +24,28 @@ export default async function handler(req, res) {
 
   let raw = "";
   for await (const chunk of req) raw += chunk;
-
   let body;
-  try { body = JSON.parse(raw); }
-  catch { body = Object.fromEntries(new URLSearchParams(raw)); }
+  try { body = JSON.parse(raw); } catch { body = Object.fromEntries(new URLSearchParams(raw)); }
 
-  console.log("PARSED_BODY:", JSON.stringify(body));
-
-  const { TransID, TransAmount, MSISDN, FirstName, AccountReference, BillRefNumber } = body;
+  const { TransID, TransAmount, FirstName, AccountReference, BillRefNumber } = body;
   const account = (AccountReference || BillRefNumber || "").trim();
-  const member  = MEMBERS[account];
+  const member = MEMBERS[account];
 
-  console.log(`MODE=${TransID ? "CONFIRM" : "VALIDATE"} account=${account} TransID=${TransID} amount=${TransAmount} from=${FirstName}`);
+  if (!member) return res.json({ ResultCode: "C2B00012", ResultDesc: "Invalid Account" });
+  if (!TransID) return res.json({ ResultCode: "0", ResultDesc: "Accepted" }); // validation
 
-  if (!member) {
-    console.log("REJECTED: unknown account:", account);
-    return res.json({ ResultCode: "C2B00012", ResultDesc: "Invalid Account" });
+  // duplicate guard
+  if (seen.has(TransID)) {
+    console.log("DUPLICATE:", TransID);
+    return res.json({ ResultCode: "0", ResultDesc: "Success" });
   }
-
-  if (!TransID) {
-    console.log("VALIDATED:", account, "→", member.name);
-    return res.json({ ResultCode: "0", ResultDesc: "Accepted" });
-  }
+  seen.add(TransID);
 
   try {
-    const msg = `Dear ${member.name}, ${FirstName || "Someone"} has sent KES ${TransAmount} into your account ${account}. Mpee mali yake. Trans ID: ${TransID}`;
-    await sendSMS(member.phone, msg);
+    await sendSMS(member.phone, `Dear ${member.name}, ${FirstName || "Someone"} sent KES ${TransAmount} to account ${account}. Mpee mali yake. Trans ID: ${TransID}`);
+    console.log("OK:", TransID, member.name);
   } catch (err) {
-    console.error("SMS_EXCEPTION:", err.message);
+    console.error("SMS_ERR:", err.message);
   }
 
   return res.json({ ResultCode: "0", ResultDesc: "Success" });
