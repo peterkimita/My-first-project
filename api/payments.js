@@ -1,113 +1,65 @@
-// pages/api/payments.js (Vercel)
-// Pure JS: Daraja → TalkSasa SMS, with logs
+export const config = { api: { bodyParser: false } };
 
-export const config = {
-  api: { bodyParser: false },
-};
-
-const TALK_SASA_URL = "https://bulksms.talksasa.com/api/v3/sms/send";
-const TALK_SASA_TOKEN = process.env.TALK_SASA_TOKEN;
-const SENDER_ID = "PejaBeauty";
-
-// Account directory
-const members = {
+const MEMBERS = {
   "001": { name: "Richard", phone: "254113794559" },
-  "002": { name: "Chris", phone: "254118569233" },
+  "002": { name: "Chris",   phone: "254118569233" },
   "003": { name: "Waigwa", phone: "254751633623" },
-  "004": { name: "Bonk", phone: "254741325170" },
-  "005": { name: "Peter", phone: "254714082191" },
+  "004": { name: "Bonk",   phone: "254741325170" },
+  "005": { name: "Peter",  phone: "254714082191" },
 };
 
-async function sendSMS(to, message) {
-  try {
-    console.log(`📨 Sending SMS to ${to}: ${message}`);
-    const res = await fetch(TALK_SASA_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${TALK_SASA_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        sender: SENDER_ID,
-        recipients: [String(to)],
-        message,
-      }),
-    });
-    const data = await res.json();
-    console.log("✅ SMS response:", data);
-  } catch (err) {
-    console.error("❌ SMS error:", err.message);
-  }
+async function sendSMS(phone, message) {
+  const res = await fetch("https://bulksms.talksasa.com/api/v3/sms/send", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.TALK_SASA_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      recipient: String(phone), // singular, not recipients[]
+      sender_id: "PejaBeauty",  // sender_id, not sender
+      type: "plain",            // required field
+      message,
+    }),
+  });
+  const data = await res.json();
+  console.log("SMS response:", JSON.stringify(data));
 }
 
 export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    console.log("❌ Invalid method:", req.method);
-    return res.status(405).json({ error: "Method not allowed" });
-  }
+  if (req.method !== "POST") return res.status(405).end();
 
-  let rawBody = "";
-  for await (const chunk of req) {
-    rawBody += chunk;
-  }
-
+  let raw = "";
+  for await (const chunk of req) raw += chunk;
   let body;
-  try {
-    body = JSON.parse(rawBody);
-  } catch {
-    const params = new URLSearchParams(rawBody);
-    body = Object.fromEntries(params);
+  try { body = JSON.parse(raw); }
+  catch { body = Object.fromEntries(new URLSearchParams(raw)); }
+
+  const { TransID, TransAmount, MSISDN, FirstName, AccountReference, BillRefNumber } = body;
+  const account = (AccountReference || BillRefNumber || "").trim();
+  const member  = MEMBERS[account];
+
+  console.log(`[${TransID ? "CONFIRM" : "VALIDATE"}] account=${account} TransID=${TransID} amount=${TransAmount} from=${FirstName} MSISDN=${MSISDN}`);
+
+  if (!member) {
+    console.log(`REJECTED unknown account: ${account}`);
+    return res.json({ ResultCode: "C2B00012", ResultDesc: "Invalid Account" });
   }
 
-  console.log("🔥 Incoming Daraja Payload:", JSON.stringify(body, null, 2));
-
-  const {
-    TransID,
-    TransAmount,
-    TransTime,
-    MSISDN,
-    FirstName,
-    AccountReference,
-    BillRefNumber,
-  } = body;
-
-  const account = AccountReference || BillRefNumber || "";
-  const VALID_ACCOUNTS = Object.keys(members);
-
-  // === VALIDATION ===
+  // VALIDATION — Daraja checks if account exists
   if (!TransID) {
-    if (!VALID_ACCOUNTS.includes(account)) {
-      console.log(`❌ Validation Failed - Invalid Account: ${account}`);
-      return res.json({
-        ResultCode: "C2B00012",
-        ResultDesc: "Invalid Account Reference",
-      });
-    }
-    console.log(`✅ Validation Passed for Account: ${account}`);
+    console.log(`VALIDATED account ${account} → ${member.name}`);
     return res.json({ ResultCode: "0", ResultDesc: "Accepted" });
   }
 
-  // === CONFIRMATION ===
-  if (!VALID_ACCOUNTS.includes(account)) {
-    console.log(`❌ Invalid Account in Confirmation: ${account}`);
-    return res.json({
-      ResultCode: "C2B00012",
-      ResultDesc: "Invalid Account",
-    });
-  }
-
+  // CONFIRMATION — send SMS and always ACK Daraja
   try {
-    const member = members[account];
-    const message = `Dear ${member.name}, ${FirstName || "Someone"} has sent ${TransAmount} into your account number ${account}, mpee mali yake Trans ID ${TransID}`;
-
-    console.log(`📊 Parsed Transaction: ID=${TransID}, Amount=${TransAmount}, Account=${account}, Sender=${FirstName}, Phone=${member.phone}`);
-
-    await sendSMS(member.phone, message);
-
-    console.log(`✅ SMS sent successfully for TransID ${TransID}`);
-    return res.json({ ResultCode: "0", ResultDesc: "Success" });
+    const msg = `Dear ${member.name}, ${FirstName || "Someone"} has sent KES ${TransAmount} into your account ${account}. Mpee mali yake. Trans ID: ${TransID}`;
+    await sendSMS(member.phone, msg);
+    console.log(`SMS sent to ${member.name} (${member.phone}) for TransID ${TransID}`);
   } catch (err) {
-    console.error("❌ Error handling transaction:", err.message);
-    return res.json({ ResultCode: "1", ResultDesc: "Internal Error" });
+    console.error(`SMS failed for TransID ${TransID}:`, err.message);
   }
+
+  return res.json({ ResultCode: "0", ResultDesc: "Success" }); // always ACK
 }
