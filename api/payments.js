@@ -1,4 +1,4 @@
-export const config = { api: { bodyParser: false } };
+// app/api/payments/route.js  (Next.js App Router)
 
 const MEMBERS = {
   "001": { name: "Richard", phone: "254113794559" },
@@ -17,9 +17,9 @@ async function sendSMS(phone, message) {
     message,
   };
 
-  console.log("SMS_PAYLOAD:", JSON.stringify(payload));
   console.log("SMS_TOKEN_EXISTS:", !!token);
   console.log("SMS_TOKEN_PREVIEW:", token ? token.slice(0, 8) + "..." : "MISSING");
+  console.log("SMS_PAYLOAD:", JSON.stringify(payload));
 
   const res = await fetch("https://bulksms.talksasa.com/api/v3/sms/send", {
     method: "POST",
@@ -31,17 +31,13 @@ async function sendSMS(phone, message) {
   });
 
   console.log("SMS_HTTP_STATUS:", res.status);
-  const raw = await res.text(); // text() not json() — avoids crash if response isn't JSON
+  const raw = await res.text();
   console.log("SMS_RAW_RESPONSE:", raw);
 }
 
-export default async function handler(req, res) {
-  if (req.method !== "POST") return res.status(405).end();
-
-  let raw = "";
-  for await (const chunk of req) raw += chunk;
-
-  console.log("RAW_BODY:", raw); // log before any parsing
+export async function POST(req) {
+  const raw = await req.text();
+  console.log("RAW_BODY:", raw);
 
   let body;
   try { body = JSON.parse(raw); }
@@ -57,12 +53,13 @@ export default async function handler(req, res) {
 
   if (!member) {
     console.log("REJECTED: unknown account:", account);
-    return res.json({ ResultCode: "C2B00012", ResultDesc: "Invalid Account" });
+    return Response.json({ ResultCode: "C2B00012", ResultDesc: "Invalid Account" });
   }
 
+  // VALIDATION
   if (!TransID) {
     console.log("VALIDATED:", account, "→", member.name);
-    return res.json({ ResultCode: "0", ResultDesc: "Accepted" });
+    return Response.json({ ResultCode: "0", ResultDesc: "Accepted" });
   }
 
   // CONFIRMATION
@@ -74,5 +71,5 @@ export default async function handler(req, res) {
     console.error("SMS_EXCEPTION:", err.message);
   }
 
-  return res.json({ ResultCode: "0", ResultDesc: "Success" });
+  return Response.json({ ResultCode: "0", ResultDesc: "Success" });
 }
