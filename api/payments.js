@@ -4,7 +4,7 @@ const MEMBERS = {
   "001": { name: "Richard", phone: "254113794559" },
   "002": { name: "Chris",   phone: "254118569233" },
   "003": { name: "Waigwa", phone: "254751633623" },
-  "004": { name: "Bonk",   phone: "254741325170" },
+  "044": { name: "Bonk",   phone: "254741325170" },
   "005": { name: "Peter",  phone: "254714082191" },
 };
 
