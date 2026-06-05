@@ -9,21 +9,30 @@ const MEMBERS = {
 };
 
 async function sendSMS(phone, message) {
+  const token = process.env.TALK_SASA_TOKEN;
+  const payload = {
+    recipient: String(phone),
+    sender_id: "PejaBeauty",
+    type: "plain",
+    message,
+  };
+
+  console.log("SMS_PAYLOAD:", JSON.stringify(payload));
+  console.log("SMS_TOKEN_EXISTS:", !!token);
+  console.log("SMS_TOKEN_PREVIEW:", token ? token.slice(0, 8) + "..." : "MISSING");
+
   const res = await fetch("https://bulksms.talksasa.com/api/v3/sms/send", {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${process.env.TALK_SASA_TOKEN}`,
+      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      recipient: String(phone), // singular, not recipients[]
-      sender_id: "PejaBeauty",  // sender_id, not sender
-      type: "plain",            // required field
-      message,
-    }),
+    body: JSON.stringify(payload),
   });
-  const data = await res.json();
-  console.log("SMS response:", JSON.stringify(data));
+
+  console.log("SMS_HTTP_STATUS:", res.status);
+  const raw = await res.text(); // text() not json() — avoids crash if response isn't JSON
+  console.log("SMS_RAW_RESPONSE:", raw);
 }
 
 export default async function handler(req, res) {
@@ -31,35 +40,39 @@ export default async function handler(req, res) {
 
   let raw = "";
   for await (const chunk of req) raw += chunk;
+
+  console.log("RAW_BODY:", raw); // log before any parsing
+
   let body;
   try { body = JSON.parse(raw); }
   catch { body = Object.fromEntries(new URLSearchParams(raw)); }
+
+  console.log("PARSED_BODY:", JSON.stringify(body));
 
   const { TransID, TransAmount, MSISDN, FirstName, AccountReference, BillRefNumber } = body;
   const account = (AccountReference || BillRefNumber || "").trim();
   const member  = MEMBERS[account];
 
-  console.log(`[${TransID ? "CONFIRM" : "VALIDATE"}] account=${account} TransID=${TransID} amount=${TransAmount} from=${FirstName} MSISDN=${MSISDN}`);
+  console.log(`MODE=${TransID ? "CONFIRM" : "VALIDATE"} account=${account} TransID=${TransID} amount=${TransAmount} from=${FirstName} MSISDN=${MSISDN}`);
 
   if (!member) {
-    console.log(`REJECTED unknown account: ${account}`);
+    console.log("REJECTED: unknown account:", account);
     return res.json({ ResultCode: "C2B00012", ResultDesc: "Invalid Account" });
   }
 
-  // VALIDATION — Daraja checks if account exists
   if (!TransID) {
-    console.log(`VALIDATED account ${account} → ${member.name}`);
+    console.log("VALIDATED:", account, "→", member.name);
     return res.json({ ResultCode: "0", ResultDesc: "Accepted" });
   }
 
-  // CONFIRMATION — send SMS and always ACK Daraja
+  // CONFIRMATION
   try {
     const msg = `Dear ${member.name}, ${FirstName || "Someone"} has sent KES ${TransAmount} into your account ${account}. Mpee mali yake. Trans ID: ${TransID}`;
+    console.log("SMS_MESSAGE:", msg);
     await sendSMS(member.phone, msg);
-    console.log(`SMS sent to ${member.name} (${member.phone}) for TransID ${TransID}`);
   } catch (err) {
-    console.error(`SMS failed for TransID ${TransID}:`, err.message);
+    console.error("SMS_EXCEPTION:", err.message);
   }
 
-  return res.json({ ResultCode: "0", ResultDesc: "Success" }); // always ACK
+  return res.json({ ResultCode: "0", ResultDesc: "Success" });
 }
