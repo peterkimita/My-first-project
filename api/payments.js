@@ -6,6 +6,8 @@ const MEMBERS = {
   "003": { name: "Waigwa", phone: "254751633623" },
   "004": { name: "Bonk",   phone: "254741325170" },
   "005": { name: "Peter",  phone: "254714082191" },
+  "006": { name: "Peter",  phone: "254714082191" },
+   
 };
 
 const seen = new Set();
