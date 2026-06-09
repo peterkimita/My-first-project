@@ -4,8 +4,8 @@ const MEMBERS = {
   "2782": { name: "Richard",     phone: "254718456514" },
   "4075": { name: "Chris",       phone: "254118569233" },
   "5510": { name: "Waigwa",      phone: "254723219321" },
-  "004": { name: "Bonk",         phone: "254741325170" },
-  "005": { name: "Peter",        phone: "254714082191" },
+  "4424": { name: "Bonk",         phone: "254741325170" },
+  "1954": { name: "Peter",        phone: "254714082191" },
 };
 
 const seen = new Set();
@@ -41,7 +41,7 @@ export default async function handler(req, res) {
   seen.add(TransID);
 
   try {
-    const msg = `Dear ${member.name}, KES ${TransAmount} recd from ${FirstName || "Someone"}. Ref ${TransID}. Pay Paybill 4163519 Acct ${account}. God bless. Mlango Soko.`;
+    const msg = `Dear ${member.name}, KES ${TransAmount} recd from ${FirstName || "Someone"}. Ref ${TransID}. Pay Paybill 4163519 Acct ${account}. God bless Peja Fashion and bookshop.`;
     await sendSMS(member.phone, msg);
     console.log("OK:", TransID, member.name);
   } catch (err) {
